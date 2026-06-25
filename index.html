@@ -5099,6 +5099,9 @@ function _renderCorretorasGrid(list) {
 
     const hasAportes  = totalAportNative > 0;
     const hasActivity = hasAportes || totalInvNative > 0 || posicoesAcoes.length > 0;
+    // Se há investimento mas nenhum aporte registrado (ex: importação B3 sem aportes manuais),
+    // o saldo disponível não pode ser calculado corretamente — usamos 0 como base.
+    const saldoCalculavel = hasAportes || totalAportNative !== 0;
 
     // Helper de formatação
     const numBR = (n, d = 0) => Number(n).toLocaleString('pt-BR', { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -5138,7 +5141,13 @@ function _renderCorretorasGrid(list) {
       <td style="text-align:center;font-weight:600;">${aplicAtivas.length + posicoesAcoes.length}</td>
       <td>${hasAportes ? fmtCell(totalAportNative, totalAportBRL, 'var(--accent2)') : '—'}</td>
       <td>${totalInvNative > 0 ? fmtCell(totalInvNative, totalInvBRL, 'var(--accent)') : '—'}</td>
-      <td>${hasActivity ? (saldoNative < 0 ? '⚠️ ' : '') + fmtCell(Math.abs(saldoNative), Math.abs(saldoBRL), saldoNative < 0 ? 'var(--red)' : 'var(--accent)') : '—'}</td>
+      <td>${hasActivity ? (
+        !saldoCalculavel && totalInvNative === 0
+          ? '—'
+          : !saldoCalculavel
+            ? '<span title="Registre aportes para calcular o saldo disponível" style="color:var(--muted);font-size:11px;">⚠️ Sem aportes</span>'
+            : (saldoNative < 0 ? '⚠️ ' : '') + fmtCell(Math.abs(saldoNative), Math.abs(saldoBRL), saldoNative < 0 ? 'var(--red)' : 'var(--accent)')
+      ) : '—'}</td>
       <td style="font-size:12px;color:var(--muted2);font-style:italic;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${c.observacoes||''}">${c.observacoes||'—'}</td>
       <td><div class="actions-cell">
         <button class="btn btn-secondary btn-sm btn-icon" title="Aportes" onclick="openAporteModal(${c._id})">💰</button>
