@@ -3451,7 +3451,7 @@ function setRFVisao(v) {
 function setAcoesVisao(v) {
   setGlobalVisao(v);
 }
-const PAGE_SIZE = 20;
+const PAGE_SIZE = 10;
 
 const COLS = [
   { key: '_sel', label: '' },
@@ -6269,7 +6269,7 @@ const fA = (n, d=2) => { const v = Number(n); if (n == null || isNaN(v)) return 
 // ─── TABLE AÇÕES ──────────────────────────────────────────────────────────
 let acoesFilter = 'Todos', acoesSort = { col: 'Data', dir: -1 };
 let acoesPage = 1, acoesSearch = '', acoesSelected = new Set();
-const ACOES_PAGE_SIZE = 20;
+const ACOES_PAGE_SIZE = 10;
 
 const ACOES_COLS = [
   { key: '_sel',        label: '' },
@@ -6335,7 +6335,7 @@ function calcCarteiraPosicoes() {
 let carteiraSearch = '';
 let carteiraSort = { col: 'ticker', dir: 1 };
 let carteiraPage = 1;
-const CARTEIRA_PAGE_SIZE = 20;
+const CARTEIRA_PAGE_SIZE = 10;
 let carteiraSelected = new Set(); // tickers selecionados para exclusão em massa
 let carteiraExpandedTickers = new Set(); // tickers com sublinhas de corretora expandidas
 
@@ -7489,7 +7489,7 @@ const ORDENS_COLS = [
 
 let ordensFilter = 'Todas', ordensSortCol = 'Data', ordensSortDir = -1;
 let ordensPage = 1, ordensSearch = '', ordensSelected = new Set();
-const ORDENS_PAGE_SIZE = 20;
+const ORDENS_PAGE_SIZE = 10;
 
 function setOrdensFilter(f) {
   ordensFilter = f;
