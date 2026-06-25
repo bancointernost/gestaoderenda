@@ -9433,21 +9433,40 @@ function _renderDashboardInner() {
   const provAno      = filteredPROVENTOS.filter(p => { if(!p.Pagamento) return false; return new Date(p.Pagamento+'T00:00:00').getFullYear()===today.getFullYear(); }).reduce((s,p)=>s+(p.ValorLiq||0),0);
 
   // ── Por corretora ──
+  // Agrupa por _corretoraId (chave única e estável) em vez do NOME, porque pode
+  // existir mais de uma corretora cadastrada com o mesmo nome (ex: duas "XP Invest."
+  // de proprietários diferentes) — agrupar por nome misturaria os dados delas.
+  // Para registros legados sem _corretoraId, cai no fallback por nome (1 corretora daquele nome).
   const corrMap = {};
+  function _corrMapKey(registro, campoNome) {
+    if (registro._corretoraId != null) return 'id:' + registro._corretoraId;
+    return 'nome:' + (registro[campoNome] || 'Sem corretora');
+  }
+  function _corrMapObj(key) {
+    if (key.startsWith('id:')) {
+      const id = Number(key.slice(3));
+      return CORRETORAS.find(c => c._id === id) || null;
+    }
+    const nome = key.slice(5);
+    return CORRETORAS.find(c => c.nome === nome) || null;
+  }
   rfAtivos.forEach(r => {
-    const n = r.Corretora||'Sem corretora';
-    if (!corrMap[n]) corrMap[n] = { rf:0, acoes:0, proventos:0 };
-    corrMap[n].rf += toBRL(r['V.Atu Aplic']||0, n);
+    const key = _corrMapKey(r, 'Corretora');
+    if (!corrMap[key]) corrMap[key] = { rf:0, acoes:0, proventos:0 };
+    const corrObj = _corrMapObj(key);
+    corrMap[key].rf += toBRL(r['V.Atu Aplic']||0, corrObj?.nome || r.Corretora);
   });
   acoesCarteira.forEach(a => {
-    const n = a.Corretora||'Sem corretora';
-    if (!corrMap[n]) corrMap[n] = { rf:0, acoes:0, proventos:0 };
-    corrMap[n].acoes += toBRL((a.Qtd||0)*(a.PrecoAtual||a.PrecoUnit||0), n);
+    const key = _corrMapKey(a, 'Corretora');
+    if (!corrMap[key]) corrMap[key] = { rf:0, acoes:0, proventos:0 };
+    const corrObj = _corrMapObj(key);
+    corrMap[key].acoes += toBRL((a.Qtd||0)*(a.PrecoAtual||a.PrecoUnit||0), corrObj?.nome || a.Corretora);
   });
   filteredPROVENTOS.forEach(p => {
-    const n = p.Instituicao||'Sem corretora';
-    if (!corrMap[n]) corrMap[n] = { rf:0, acoes:0, proventos:0 };
-    corrMap[n].proventos += toBRL(p.ValorLiq||0, n);
+    const key = _corrMapKey(p, 'Instituicao');
+    if (!corrMap[key]) corrMap[key] = { rf:0, acoes:0, proventos:0 };
+    const corrObj = _corrMapObj(key);
+    corrMap[key].proventos += toBRL(p.ValorLiq||0, corrObj?.nome || p.Instituicao);
   });
 
   // ── Saldo disponível em corretoras (aportes + proventos – RF investido), em BRL ──
@@ -9459,7 +9478,9 @@ function _renderDashboardInner() {
     if (isGeral || c.proprietario === dashboardView) {
       const normalize = s => (s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
       const aportes = c.aportes || [];
-      const provInvNative = PROVENTOS.filter(p => normalize(p.Instituicao||'') === normalize(c.nome||''))
+      // Filtra proventos/RF desta corretora especificamente (por _id), não por nome,
+      // para não misturar com outra corretora cadastrada com o mesmo nome.
+      const provInvNative = PROVENTOS.filter(p => p._corretoraId != null ? p._corretoraId === c._id : normalize(p.Instituicao||'') === normalize(c.nome||''))
                                       .reduce((s, p) => s + (p.ValorLiq || 0), 0);
       if (!aportes.length && provInvNative <= 0) return;
       const rate = fxRateByCorretora(c.nome);
@@ -9472,10 +9493,10 @@ function _renderDashboardInner() {
       if (saldoNative <= 0) return;
       const saldoBRL = saldoNative * rate;
       saldoAportesDispBRL += saldoBRL;
-      // Garante que a corretora aparece no corrMap mesmo sem RF/ações
-      const n = c.nome || 'Sem corretora';
-      if (!corrMap[n]) corrMap[n] = { rf: 0, acoes: 0, proventos: 0, saldo: 0 };
-      corrMap[n].saldo = (corrMap[n].saldo || 0) + saldoBRL;
+      // Garante que a corretora aparece no corrMap mesmo sem RF/ações — usa a mesma chave (por _id) do agrupamento principal
+      const key = 'id:' + c._id;
+      if (!corrMap[key]) corrMap[key] = { rf: 0, acoes: 0, proventos: 0, saldo: 0 };
+      corrMap[key].saldo = (corrMap[key].saldo || 0) + saldoBRL;
     }
   });
 
@@ -9680,19 +9701,23 @@ function _renderDashboardInner() {
     <!-- Por corretora -->
     <div class="db-card">
       <div class="db-section-title">🏦 Por Corretora</div>
-      ${Object.entries(corrMap).sort((a,b)=>(b[1].rf+b[1].acoes)-(a[1].rf+a[1].acoes)).map(([nome,v])=>{
+      ${Object.entries(corrMap).sort((a,b)=>(b[1].rf+b[1].acoes)-(a[1].rf+a[1].acoes)).map(([key,v])=>{
         const total = v.rf+v.acoes;
         const pct   = patrimTotal>0 ? total/patrimTotal*100 : 0;
-        const normalize = s => (s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim();
-        const corr  = CORRETORAS.find(c=>normalize(c.nome)===normalize(nome));
+        const corr  = _corrMapObj(key);
+        const nome  = corr?.nome || key.replace(/^nome:/, '');
         const moedaCorr = corr?.moeda || 'BRL';
         const fxRateCorr = moedaCorr !== 'BRL' ? (_fxCache[moedaCorr]?.rate || 1) : 1;
         const fxSymCorr  = moedaCorr === 'USD' ? 'US$' : moedaCorr === 'EUR' ? '€' : 'R$';
         const aportes = corr?.aportes || [];
         const totalAportadoNative = aportes.reduce((s,a) => s + (a.tipo==='entrada' ? a.valor : -a.valor), 0);
         const totalAportado = totalAportadoNative * fxRateCorr;
-        // Custo RF (valor aplicado original, só ativos) — mesma lógica da tela Corretoras
-        const aplicAtivas = DATA.filter(r => normalize(r.Corretora||'')===normalize(nome) && r.Status==='Comprado');
+        // Custo RF (valor aplicado original, só ativos) — mesma lógica da tela Corretoras.
+        // Filtra por _corretoraId quando o registro tem (amarração estável), senão cai no nome.
+        const aplicAtivas = DATA.filter(r => r.Status==='Comprado' && (
+          corr ? (r._corretoraId != null ? r._corretoraId === corr._id : r.Corretora === corr.nome)
+               : !r._corretoraId && r.Corretora === nome
+        ));
         const totalInvNative = aplicAtivas.reduce((s,r) => s + (r.Valor||0), 0);
         const totalInv = totalInvNative * fxRateCorr;
         const saldoDisp = totalAportado - totalInv;
