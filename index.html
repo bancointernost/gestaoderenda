@@ -3507,13 +3507,15 @@ function renderTable() {
   document.getElementById('btnDeleteAll').style.display = selectedIds.size > 0 ? 'inline-flex' : 'none';
 
   // Head — só reconstrói se a coluna/direção de ordenação mudou
-  const headKey = `${currentSort.col}|${currentSort.dir}|${selectedIds.size}`;
+  // (o checkbox master usa toggleAllFiltered(), que sempre lê o filtro ATUAL no momento do clique
+  // — por isso não precisa dos IDs "congelados" no momento da renderização do cabeçalho)
+  const headKey = `${currentSort.col}|${currentSort.dir}`;
   const headEl = document.getElementById('tableHead');
   if (headEl.dataset.lastKey !== headKey) {
     headEl.dataset.lastKey = headKey;
     const allFilteredChecked = filtered.length > 0 && filtered.every(r => selectedIds.has(r._id));
     headEl.innerHTML = `<tr>${COLS.map(c => {
-      if (c.key === '_sel') return `<th style="width:36px"><input type="checkbox" id="chkSelectAll" ${allFilteredChecked?'checked':''} title="${allFilteredChecked?'Desmarcar todos':'Selecionar todos ('+filtered.length+')'}" onchange="toggleAll(this,${JSON.stringify(filtered.map(r=>r._id))})"></th>`;
+      if (c.key === '_sel') return `<th style="width:36px"><input type="checkbox" id="chkSelectAll" ${allFilteredChecked?'checked':''} title="${allFilteredChecked?'Desmarcar todos':'Selecionar todos'}" onchange="toggleAllFiltered(this)"></th>`;
       if (c.key === '_actions') return `<th style="width:90px">Ações</th>`;
       const sorted = currentSort.col === c.key;
       return `<th class="${sorted?'sorted':''}" onclick="sortBy('${c.key}')">${c.label}<span class="sort-icon">${sorted?(currentSort.dir===1?'↑':'↓'):'↕'}</span></th>`;
@@ -3526,6 +3528,7 @@ function renderTable() {
     if (chkMaster) {
       chkMaster.checked = allFilteredChecked;
       chkMaster.indeterminate = someChecked;
+      chkMaster.title = allFilteredChecked ? 'Desmarcar todos' : `Selecionar todos (${filtered.length})`;
     }
   }
 
@@ -3714,6 +3717,14 @@ function toggleSelect(id, checked) {
   // Atualiza só o botão de excluir e o checkbox mestre
   _updateSelectionUI();
 }
+// Seleciona/desmarca TODOS os registros do filtro ATUAL (lido no momento do clique,
+// não congelado da última renderização do cabeçalho — evita desync ao trocar filtro/visão/página).
+function toggleAllFiltered(cb) {
+  const ids = getFiltered().map(r => r._id);
+  ids.forEach(id => cb.checked ? selectedIds.add(id) : selectedIds.delete(id));
+  renderTable();
+}
+// Mantida por compatibilidade (não é mais usada pelo cabeçalho da tabela).
 function toggleAll(cb, ids) {
   ids.forEach(id => cb.checked ? selectedIds.add(id) : selectedIds.delete(id));
   // Re-render completo necessário para sincronizar todos os checkboxes da página
@@ -6234,13 +6245,18 @@ const ACOES_TIPOS = ['Todos','Compra','Bonificação','Desdobramento','Grupament
 // Calcula posição consolidada por ticker levando em conta compras E vendas de ACOES
 function calcCarteiraPosicoes() {
   // ── Agrupa por ticker + corretora (sem total consolidado) ──────────────
+  // Agrupa pela CHAVE DA CORRETORA (id:N quando disponível, senão nome) em vez do
+  // nome puro, porque pode haver mais de uma corretora cadastrada com o mesmo nome
+  // (ex: duas "XP Invest." de proprietários diferentes) — agrupar só pelo nome
+  // misturaria as posições delas em uma única linha.
   const map = {};
   getAcoesFiltradas().forEach(op => {
     const t    = (op.Ticker || '').toUpperCase();
     if (!t) return;
     const corr = op.Corretora || '—';
-    const key  = t + '|||' + corr;
-    if (!map[key]) map[key] = { ticker: t, empresa: '', corretora: corr, qtd: 0, custoTotal: 0, taxasTotal: 0 };
+    const corrKey = op._corretoraId != null ? ('id:' + op._corretoraId) : ('nome:' + corr);
+    const key  = t + '|||' + corrKey;
+    if (!map[key]) map[key] = { ticker: t, empresa: '', corretora: corr, _corretoraId: op._corretoraId ?? null, qtd: 0, custoTotal: 0, taxasTotal: 0 };
     const entry = map[key];
     const qtd   = Number(op.Qtd)       || 0;
     const preco = Number(op.PrecoUnit) || 0;
@@ -6324,9 +6340,12 @@ function renderAcoesTable() {
   ];
 
   const sortableKeys = new Set(['ticker','empresa','corretora','qtd','custoTotal']);
-  const allFilteredTickers = filtered.map(p => p.ticker + '|||' + p.corretora);
-  const allFilteredChecked = filtered.length > 0 && filtered.every(p => carteiraSelected.has(p.ticker + '|||' + p.corretora));
-  const someFilteredChecked = !allFilteredChecked && filtered.some(p => carteiraSelected.has(p.ticker + '|||' + p.corretora));
+  // Chave estável de seleção: usa _corretoraId quando disponível (evita misturar
+  // corretoras com nome duplicado), com fallback pro nome para posições legadas.
+  const posKey = p => p.ticker + '|||' + (p._corretoraId != null ? ('id:' + p._corretoraId) : ('nome:' + p.corretora));
+  const allFilteredTickers = filtered.map(posKey);
+  const allFilteredChecked = filtered.length > 0 && filtered.every(p => carteiraSelected.has(posKey(p)));
+  const someFilteredChecked = !allFilteredChecked && filtered.some(p => carteiraSelected.has(posKey(p)));
 
   document.getElementById('acoesTableHead').innerHTML = '<tr>' + COLS.map(c => {
     if (c.key === '_sel') return `<th style="width:36px"><input type="checkbox" id="chkCarteiraAll" ${allFilteredChecked?'checked':''} onchange="carteiraToggleAll(this.checked,allFilteredTickersCache)" style="accent-color:var(--accent)" title="${allFilteredChecked?'Desmarcar todos':'Selecionar todos ('+filtered.length+')'}"></th>`;
@@ -6344,7 +6363,7 @@ function renderAcoesTable() {
       const pm  = p.qtd > 0 ? p.custoTotal / p.qtd : 0;
       const q   = QUOTES_CACHE[p.ticker];
       const loading = QUOTES_LOADING.has(p.ticker);
-      const checked = carteiraSelected.has(p.ticker + '|||' + p.corretora);
+      const checked = carteiraSelected.has(posKey(p));
 
       let cotCell = '<span style="color:var(--muted2);font-size:11px;">—</span>';
       let vmCell  = '<span style="color:var(--muted2);">—</span>';
@@ -6379,7 +6398,7 @@ function renderAcoesTable() {
       const empresaCell = p.empresa || '—';
 
       return '<tr style="' + (checked ? 'background:rgba(0,212,170,.04);' : '') + borderTop + '">'
-        + '<td><input type="checkbox" ' + (checked?'checked':'') + ' onchange="carteiraToggleSel(\'' + p.ticker + '|||' + p.corretora + '\',this.checked)" style="accent-color:var(--accent)"></td>'
+        + '<td><input type="checkbox" ' + (checked?'checked':'') + ' onchange="carteiraToggleSel(\'' + posKey(p) + '\',this.checked)" style="accent-color:var(--accent)"></td>'
         + '<td>' + tickerCell + '</td>'
         + '<td class="desc" title="' + p.empresa + '">' + empresaCell + '</td>'
         + '<td><span style="font-size:11px;font-weight:600;color:var(--accent2)">🏦 ' + p.corretora + '</span></td>'
