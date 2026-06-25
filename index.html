@@ -4409,36 +4409,35 @@ let _fbEnv = 'producao'; // Ambiente fixo: produção
 // ║     inválida — evitando sobrescrever config salva manualmente pelo usuário.  ║
 // ║  3. loadFirebaseConfig() lê do localStorage; se retornar nulo por qualquer  ║
 // ║     razão (modo privado, quota, etc.) cai neste objeto como fallback.        ║
-// ║  4. O modal de Armazenamento (⚙️ > Armazenamento) ainda permite ao usuário  ║
-// ║     colar uma config diferente — isso sobrescreve o localStorage mas NÃO    ║
-// ║     altera este objeto.                                                      ║
+// ║  4. O modal de Armazenamento ainda permite colar uma config diferente —      ║
+// ║     isso sobrescreve o localStorage mas NÃO altera este objeto.              ║
 // ║                                                                              ║
 // ║  PARA TROCAR DE PROJETO:                                                    ║
 // ║  Atualize apenas os valores de _FB_DEFAULT_CONFIG abaixo e, se necessário,  ║
 // ║  limpe o localStorage do browser (DevTools > Application > Local Storage).  ║
 // ╚══════════════════════════════════════════════════════════════════════════════╝
-// ╔══════════════════════════════════════════════════════════════════════════════╗
-// ║  CONFIGURAÇÃO DO FIREBASE — NÃO HARDCODED (segurança)                        ║
-// ║                                                                              ║
-// ║  Por segurança (e para evitar alertas de "segredo exposto" no GitHub),      ║
-// ║  as credenciais do Firebase NÃO ficam mais fixas neste arquivo.             ║
-// ║                                                                              ║
-// ║  COMO CONFIGURAR:                                                           ║
-// ║  Abra o app > ⚙️ Configurações > Armazenamento, e cole a config do seu     ║
-// ║  projeto Firebase (Console Firebase > Configurações do projeto > Seus apps  ║
-// ║  > SDK). Ela será salva no localStorage do navegador (chave:                ║
-// ║  "firebase_config_producao") e não precisa ser commitada no repositório.    ║
-// ║                                                                              ║
-// ║  IMPORTANTE: revogue/gire a chave antiga exposta no histórico do Git        ║
-// ║  (Google Cloud Console > APIs e Serviços > Credenciais) e restrinja a nova  ║
-// ║  chave por domínio (HTTP referrer) e por API.                               ║
-// ╚══════════════════════════════════════════════════════════════════════════════╝
-const _FB_DEFAULT_CONFIG = null;
+const _FB_DEFAULT_CONFIG = {
+  apiKey:            "AIzaSyCpptkQfU7pXcTusFSDuhNFyohu3adJuRM",
+  authDomain:        "patrimonioadois-prod.firebaseapp.com",
+  projectId:         "patrimonioadois-prod",
+  storageBucket:     "patrimonioadois-prod.firebasestorage.app",
+  messagingSenderId: "762246833539",
+  appId:             "1:762246833539:web:8d5513e7857464cfe242b6",
+  measurementId:     "G-1XXKW4HPZS"
+};
 
-// Não grava mais um config padrão no localStorage — o usuário deve configurar
-// manualmente via ⚙️ Configurações > Armazenamento.
+// Grava a config padrão no localStorage apenas se ainda não houver uma válida
 (function _seedFirebaseConfig() {
-  // Intencionalmente vazio: sem fallback hardcoded.
+  try {
+    const key = FB_CFG_PREFIX + 'producao';
+    const existing = localStorage.getItem(key);
+    if (!existing) {
+      localStorage.setItem(key, JSON.stringify(_FB_DEFAULT_CONFIG));
+    } else {
+      const parsed = JSON.parse(existing);
+      if (!parsed?.apiKey) localStorage.setItem(key, JSON.stringify(_FB_DEFAULT_CONFIG));
+    }
+  } catch(e) {}
 })();
 // ══════════════════════════════════════════════════════════════════════════════
 // ══════════════════════════════════════════════════════════════════════════════
@@ -4476,7 +4475,7 @@ async function fbInitApp(env) {
 
 function fbDocRefForUser(uid) {
   const fb = window._fb;
-  return fb.doc(_fbDb, 'carteiras', uid);
+  return fb.doc(_fbDb, 'users', uid);
 }
 
 // ── Modal: navegação entre seções ───────────────────────────────────────
