@@ -3087,6 +3087,27 @@ function saveCorretoras(data) { localStorage.setItem(CORRETORAS_KEY, JSON.string
 let CORRETORAS = loadCorretoras();
 let nextCorretoraId = Math.max(0, ...CORRETORAS.map(r => r._id || 0)) + 1;
 
+// ─── RESOLVER CORRETORA POR ID (amarração estável) ──────────────────────────
+// Dado o nome selecionado em um <select>, retorna { Corretora: nome, _corretoraId: id }
+// Garante que todo registro novo/editado fique amarrado pelo _id da corretora,
+// e não pelo nome (que pode ser renomeado depois sem perder a referência).
+function resolveCorretoraRef(nomeSelecionado) {
+  const corr = CORRETORAS.find(c => c.nome === nomeSelecionado);
+  return {
+    Corretora: corr ? corr.nome : (nomeSelecionado || ''),
+    _corretoraId: corr ? corr._id : null
+  };
+}
+// Dado um registro com _corretoraId e/ou Corretora (nome), retorna o objeto da corretora vinculada.
+function getCorretoraDoRegistro(registro, campoNome = 'Corretora') {
+  if (!registro) return null;
+  if (registro._corretoraId != null) {
+    const porId = CORRETORAS.find(c => c._id === registro._corretoraId);
+    if (porId) return porId;
+  }
+  return CORRETORAS.find(c => c.nome === registro[campoNome]) || null;
+}
+
 // ─── FORM FIELDS DEF ────────────────────────────────────────────────────────
 const FIELDS = [
   { key: 'Descrição', label: 'Descrição', type: 'text', required: true, full: true },
@@ -3734,6 +3755,11 @@ function openForm(id = null) {
   document.getElementById('formFields').innerHTML = FIELDS.map(f => {
     if (f.section) return `<div class="section-title full">${f.section}</div>`;
     let val = record[f.key] ?? '';
+    // Corretora: se o registro tem _corretoraId, usa o nome ATUAL da corretora (sobrevive a renomeações)
+    if (f.key === 'Corretora' && record._corretoraId != null) {
+      const corrAtual = CORRETORAS.find(c => c._id === record._corretoraId);
+      if (corrAtual) val = corrAtual.nome;
+    }
     // Tx de Juros salvo como 0.15 → exibir como 15
     if (f.key === 'Tx de Juros' && val !== '') val = parseFloat(val) * 100;
     const baseClass = `form-group${f.full?' full':''}`;
@@ -3741,7 +3767,11 @@ function openForm(id = null) {
       return `<input type="hidden" id="f_${f.key.replace(/[^a-z0-9]/gi,'_')}" value="${val}">`;
     }
     if (f.type === 'select') {
-      const opts = f.options.map(o => `<option value="${o}" ${val===o?'selected':''}>${o}</option>`).join('');
+      const opts = f.options.map(o => {
+        const ov = (o && typeof o === 'object') ? o.value : o;
+        const ol = (o && typeof o === 'object') ? o.label : o;
+        return `<option value="${ov}" ${val===ov?'selected':''}>${ol}</option>`;
+      }).join('');
       return `<div class="${baseClass}"><label>${f.label}${f.required?' *':''}</label><select id="f_${f.key.replace(/[^a-z0-9]/gi,'_')}">${opts}</select></div>`;
     }
     if (f.type === 'currency') {
@@ -4031,6 +4061,9 @@ function saveRecord() {
     record[f.key] = val ?? (f.type === 'number' ? null : '');
   });
   if (!valid) { toast('Preencha os campos obrigatórios', 'error'); return; }
+
+  // Amarra o registro à corretora pelo ID (não só pelo nome), para sobreviver a renomeações
+  Object.assign(record, resolveCorretoraRef(record['Corretora']));
 
   // ── 2. Recalcula tudo do zero a partir dos valores lidos ─────────────────
   const valor      = record['Valor']       ?? 0;
@@ -5228,10 +5261,11 @@ function confirmDeleteCorretora(id) {
   const nome = c?.nome || '';
 
   // Verifica se existem lançamentos vinculados a esta corretora antes de permitir a exclusão
-  const temRF        = DATA.some(r => r.Corretora === nome);
-  const temAcoes      = ACOES.some(a => a.Corretora === nome);
-  const temOrdens     = ORDENS.some(o => o.Corretora === nome);
-  const temProventos  = (typeof PROVENTOS !== 'undefined' && Array.isArray(PROVENTOS)) ? PROVENTOS.some(p => p.Corretora === nome) : false;
+  // (checa tanto por _corretoraId quanto por nome, para cobrir registros antigos sem ID)
+  const temRF        = DATA.some(r => r._corretoraId != null ? r._corretoraId === id : r.Corretora === nome);
+  const temAcoes      = ACOES.some(a => a._corretoraId != null ? a._corretoraId === id : a.Corretora === nome);
+  const temOrdens     = ORDENS.some(o => o._corretoraId != null ? o._corretoraId === id : o.Corretora === nome);
+  const temProventos  = (typeof PROVENTOS !== 'undefined' && Array.isArray(PROVENTOS)) ? PROVENTOS.some(p => p._corretoraId != null ? p._corretoraId === id : (p.Instituicao === nome || p.Corretora === nome)) : false;
   const aportes       = c?.aportes || [];
   const temMovimentacoes = aportes.some(a => a.tipo === 'entrada' || a.tipo === 'retirada');
 
@@ -5625,7 +5659,12 @@ function deleteAporte(aporteIndex) {
 
 // ─── DYNAMIC CORRETORA DROPDOWN ───────────────────────────────────────────────
 function updateCorretoraField() {
-  const nomes = CORRETORAS.map(c => c.nome).sort();
+  const nomes = [...CORRETORAS]
+    .sort((a, b) => a.nome.localeCompare(b.nome))
+    .map(c => ({
+      value: c.nome,
+      label: c.proprietario ? `${c.nome} — ${c.proprietario}` : c.nome
+    }));
   // Atualiza dropdown de Renda Fixa
   const idx = FIELDS.findIndex(f => f.key === 'Corretora');
   if (idx >= 0) {
@@ -6586,8 +6625,11 @@ function editarLancamento(id, ticker) {
   // Fecha o modal de lançamentos e abre o form preenchido
   closeConfirmDeleteCarteira();
 
-  const nomes = CORRETORAS.map(c => c.nome).sort();
-  const corrOpts = nomes.map(n => `<option value="${n}" ${n === op.Corretora ? 'selected' : ''}>${n}</option>`).join('');
+  const nomes = [...CORRETORAS].sort((a, b) => a.nome.localeCompare(b.nome));
+  const corrOpts = nomes.map(c => {
+    const isSel = op._corretoraId != null ? c._id === op._corretoraId : c.nome === op.Corretora;
+    return `<option value="${c.nome}" ${isSel ? 'selected' : ''}>${c.proprietario ? `${c.nome} — ${c.proprietario}` : c.nome}</option>`;
+  }).join('');
 
   document.getElementById('novaAcaoCarteiraTitle').textContent = `✏️ Editar Lançamento — ${op.Ticker}`;
   document.getElementById('novaAcaoCarteiraFields').innerHTML = NOVA_ACAO_CARTEIRA_FIELDS.map(f => {
@@ -6688,8 +6730,8 @@ const NOVA_ACAO_CARTEIRA_FIELDS = [
 ];
 
 function openNovaAcaoCarteira() {
-  const nomes = CORRETORAS.map(c => c.nome).sort();
-  const corrOpts = nomes.map(n => `<option value="${n}">${n}</option>`).join('');
+  const nomes = [...CORRETORAS].sort((a, b) => a.nome.localeCompare(b.nome));
+  const corrOpts = nomes.map(c => `<option value="${c.nome}">${c.proprietario ? `${c.nome} — ${c.proprietario}` : c.nome}</option>`).join('');
 
   document.getElementById('novaAcaoCarteiraFields').innerHTML = NOVA_ACAO_CARTEIRA_FIELDS.map(f => {
     const baseClass = `form-group${f.full ? ' full' : ''}`;
@@ -6984,10 +7026,19 @@ function openAcaoForm(id = null) {
 
   document.getElementById('acaoFormFields').innerHTML = ACAO_FIELDS.map(f => {
     if (f.section) return `<div class="section-title full">${f.section}</div>`;
-    const val = f.isCalc ? '' : (record[f.key] ?? '');
+    let val = f.isCalc ? '' : (record[f.key] ?? '');
+    // Corretora: se o registro tem _corretoraId, usa o nome ATUAL da corretora (sobrevive a renomeações)
+    if (f.key === 'Corretora' && record._corretoraId != null) {
+      const corrAtual = CORRETORAS.find(c => c._id === record._corretoraId);
+      if (corrAtual) val = corrAtual.nome;
+    }
     const baseClass = `form-group${f.full?' full':''}`;
     if (f.type === 'select') {
-      const opts = f.options.map(o => `<option value="${o}" ${val===o?'selected':''}>${o}</option>`).join('');
+      const opts = f.options.map(o => {
+        const ov = (o && typeof o === 'object') ? o.value : o;
+        const ol = (o && typeof o === 'object') ? o.label : o;
+        return `<option value="${ov}" ${val===ov?'selected':''}>${ol}</option>`;
+      }).join('');
       return `<div class="${baseClass}"><label>${f.label}${f.required?' *':''}</label><select id="af_${f.key}">${opts}</select></div>`;
     }
     // Campo Taxas — discreto (colapsado por padrão)
@@ -7123,6 +7174,9 @@ function saveAcao() {
   record.PrecoTotal = tipo === 'Venda' ? qtd * preco - taxas : qtd * preco + taxas;
 
   if (!valid) { toast('Preencha os campos obrigatórios', 'error'); return; }
+
+  // Amarra o registro à corretora pelo ID (não só pelo nome), para sobreviver a renomeações
+  Object.assign(record, resolveCorretoraRef(record['Corretora']));
 
   if (editingAcaoId) {
     const idx = ACOES.findIndex(r => r._id === editingAcaoId);
@@ -7504,8 +7558,14 @@ function openOrdemForm(id, prefill) {
   const corretorasQtdList = corretorasQtdMap ? Object.entries(corretorasQtdMap).sort((a, b) => b[1] - a[1]) : null;
 
   const corrOptions = corretorasQtdList
-    ? corretorasQtdList.map(([nome, qtd]) => `<option value="${nome}" data-qtd="${qtd}">${nome}</option>`).join('')
-    : CORRETORAS.map(c => `<option value="${c.nome}" ${record?.Corretora===c.nome?'selected':''}>${c.nome}</option>`).join('');
+    ? corretorasQtdList.map(([nome, qtd]) => {
+        const prop = CORRETORAS.find(c => c.nome === nome)?.proprietario;
+        return `<option value="${nome}" data-qtd="${qtd}">${prop ? `${nome} — ${prop}` : nome}</option>`;
+      }).join('')
+    : CORRETORAS.map(c => {
+        const isSel = record?._corretoraId != null ? c._id === record._corretoraId : record?.Corretora === c.nome;
+        return `<option value="${c.nome}" ${isSel ? 'selected' : ''}>${c.proprietario ? `${c.nome} — ${c.proprietario}` : c.nome}</option>`;
+      }).join('');
 
   // Para Venda nova, o máximo de Qtd depende da corretora selecionada (padrão: a primeira da lista, maior disponibilidade)
   const qtdMaxInicial = corretorasQtdList && corretorasQtdList.length ? corretorasQtdList[0][1] : pre._qtdMax;
@@ -7662,6 +7722,7 @@ function syncOrdemToCarteira(ordemRecord, oldOrdemId) {
     Empresa:   ordemRecord.Empresa  || '',
     Tipo:      tipo,
     Corretora: ordemRecord.Corretora || '',
+    _corretoraId: ordemRecord._corretoraId ?? null,
     Data:      ordemRecord.Data     || '',
     Qtd:       qtd,
     PrecoUnit:  precoUnit,
@@ -7698,6 +7759,9 @@ function saveOrdem() {
   record.Total = qtd * preco + taxas;
 
   if (!valid) { toast('Preencha os campos obrigatórios', 'error'); return; }
+
+  // Amarra o registro à corretora pelo ID (não só pelo nome), para sobreviver a renomeações
+  Object.assign(record, resolveCorretoraRef(record['Corretora']));
 
   // Bloqueia venda de quantidade maior do que o disponível naquela corretora
   if (record.Tipo === 'Venda') {
@@ -8096,6 +8160,45 @@ let proventosNextId = Math.max(0, ...PROVENTOS.map(r => r._id || 0)) + 1;
 PROVENTOS.forEach(p => { if (!p._id) p._id = proventosNextId++; });
 let proventosFilter = 'Todos';
 
+// ─── MIGRAÇÃO: amarra registros antigos à corretora pelo ID ─────────────────
+// Registros criados antes desta versão só guardavam o NOME da corretora.
+// Se a corretora for renomeada, esse nome não casa mais e a referência se perde.
+// Esta migração roda uma única vez: para cada registro sem _corretoraId, tenta
+// achar a corretora correspondente pelo nome (comparação tolerante a
+// maiúsculas/minúsculas e espaços) e grava o _id encontrado. A partir daqui,
+// renomear uma corretora não quebra mais nenhuma referência.
+function migrarCorretoraIds() {
+  const norm = s => (s || '').toString().trim().toLowerCase();
+  const porNome = new Map(CORRETORAS.map(c => [norm(c.nome), c._id]));
+  let alterados = { rf: 0, acoes: 0, ordens: 0, proventos: 0 };
+
+  function migrarLista(lista, campoNome) {
+    let count = 0;
+    (lista || []).forEach(r => {
+      if (r._corretoraId == null) {
+        const id = porNome.get(norm(r[campoNome]));
+        if (id != null) { r._corretoraId = id; count++; }
+      }
+    });
+    return count;
+  }
+
+  alterados.rf        = migrarLista(DATA, 'Corretora');
+  alterados.acoes      = migrarLista(ACOES, 'Corretora');
+  alterados.ordens     = migrarLista(ORDENS, 'Corretora');
+  alterados.proventos  = migrarLista(PROVENTOS, 'Instituicao');
+
+  const total = alterados.rf + alterados.acoes + alterados.ordens + alterados.proventos;
+  if (total > 0) {
+    saveData(DATA);
+    saveAcoes(ACOES);
+    saveOrdens(ORDENS);
+    saveProventos(PROVENTOS);
+    console.log('[migração corretoraId] vínculos recuperados:', alterados);
+  }
+}
+migrarCorretoraIds();
+
 // ─── IMPORTAR B3: PROVENTOS ──────────────────────────────────────────────────
 function triggerImportB3Proventos() {
   if (typeof XLSX === 'undefined') {
@@ -8341,12 +8444,22 @@ function openProventoForm(id = null) {
   if (typeof updateCorretoraField === 'function') updateCorretoraField(); // garante lista de instituições atualizada
 
   document.getElementById('proventoFormFields').innerHTML = PROVENTO_FIELDS.map(f => {
-    const val = record[f.key] ?? '';
+    let val = record[f.key] ?? '';
+    // Instituição: se o registro tem _corretoraId, usa o nome ATUAL da corretora (sobrevive a renomeações)
+    if (f.key === 'Instituicao' && record._corretoraId != null) {
+      const corrAtual = CORRETORAS.find(c => c._id === record._corretoraId);
+      if (corrAtual) val = corrAtual.nome;
+    }
     const baseClass = `form-group${f.full ? ' full' : ''}`;
     if (f.type === 'select') {
-      let opts = f.options.map(o => `<option value="${o}" ${val === o ? 'selected' : ''}>${o}</option>`).join('');
+      const optValues = f.options.map(o => (o && typeof o === 'object') ? o.value : o);
+      let opts = f.options.map(o => {
+        const ov = (o && typeof o === 'object') ? o.value : o;
+        const ol = (o && typeof o === 'object') ? o.label : o;
+        return `<option value="${ov}" ${val === ov ? 'selected' : ''}>${ol}</option>`;
+      }).join('');
       if (!f.required) opts = `<option value="" ${val === '' ? 'selected' : ''}>Selecione...</option>` + opts;
-      if (val && !f.options.includes(val)) opts += `<option value="${val}" selected>${val}</option>`;
+      if (val && !optValues.includes(val)) opts += `<option value="${val}" selected>${val}</option>`;
       return `<div class="${baseClass}"><label>${f.label}${f.required ? ' *' : ''}</label><select id="pf_${f.key}">${opts}</select></div>`;
     }
     if (f.type === 'currency') {
@@ -8518,6 +8631,11 @@ function saveProvento() {
     record[f.key] = val;
   });
   if (!valid) { toast('Preencha os campos obrigatórios (*)', 'error'); return; }
+
+  // Amarra o registro à corretora pelo ID (não só pelo nome), para sobreviver a renomeações
+  const _refProv = resolveCorretoraRef(record['Instituicao']);
+  record['Instituicao'] = _refProv.Corretora;
+  record['_corretoraId'] = _refProv._corretoraId;
 
   if (editingProventoId) {
     const idx = PROVENTOS.findIndex(r => r._id === editingProventoId);
