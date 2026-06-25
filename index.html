@@ -4322,10 +4322,10 @@ function buildPayload() {
   return {
     version: 2,
     exportedAt: new Date().toISOString(),
-    rendaFixa:  DATA.map(({ _id, ...r }) => r),
-    corretoras: CORRETORAS.map(({ _id, ...r }) => r),
-    acoes:      ACOES.map(({ _id, ...r }) => r),
-    ordens:     (typeof ORDENS !== 'undefined' ? ORDENS : []).map(({ _id, ...r }) => r),
+    rendaFixa:  DATA.map(r => r),
+    corretoras: CORRETORAS.map(r => r),
+    acoes:      ACOES.map(r => r),
+    ordens:     (typeof ORDENS !== 'undefined' ? ORDENS : []).map(r => r),
   };
 }
 
@@ -4856,16 +4856,19 @@ function processImport(text, handle) {
     if (parsed.version === 2) {
       // Formato completo
       if (Array.isArray(parsed.rendaFixa)) {
-        DATA = recalcAllRF(parsed.rendaFixa.map((r, i) => ({ ...r, _id: nextId++ })));
+        DATA = recalcAllRF(parsed.rendaFixa.map(r => ({ ...r, _id: r._id ?? nextId++ })));
+        nextId = Math.max(nextId, ...DATA.map(r => r._id || 0)) + 1;
         saveData(DATA);
       }
       if (Array.isArray(parsed.corretoras)) {
-        CORRETORAS = parsed.corretoras.map((r, i) => ({ ...r, _id: nextCorretoraId++ }));
+        CORRETORAS = parsed.corretoras.map(r => ({ ...r, _id: r._id ?? nextCorretoraId++ }));
+        nextCorretoraId = Math.max(nextCorretoraId, ...CORRETORAS.map(r => r._id || 0)) + 1;
         saveCorretoras(CORRETORAS);
         updateCorretoraField();
       }
       if (Array.isArray(parsed.acoes)) {
-        ACOES = parsed.acoes.map((r, i) => ({ ...r, _id: acoesNextId++ }));
+        ACOES = parsed.acoes.map(r => ({ ...r, _id: r._id ?? acoesNextId++ }));
+        acoesNextId = Math.max(acoesNextId, ...ACOES.map(r => r._id || 0)) + 1;
         saveAcoes(ACOES);
       }
       const total = (parsed.rendaFixa?.length||0) + (parsed.acoes?.length||0) + (parsed.corretoras?.length||0);
@@ -5099,8 +5102,6 @@ function _renderCorretorasGrid(list) {
 
     const hasAportes  = totalAportNative > 0;
     const hasActivity = hasAportes || totalInvNative > 0 || posicoesAcoes.length > 0;
-    // Se há investimento mas nenhum aporte registrado (ex: importação B3 sem aportes manuais),
-    // o saldo disponível não pode ser calculado corretamente — usamos 0 como base.
     const saldoCalculavel = hasAportes || totalAportNative !== 0;
 
     // Helper de formatação
@@ -5141,13 +5142,7 @@ function _renderCorretorasGrid(list) {
       <td style="text-align:center;font-weight:600;">${aplicAtivas.length + posicoesAcoes.length}</td>
       <td>${hasAportes ? fmtCell(totalAportNative, totalAportBRL, 'var(--accent2)') : '—'}</td>
       <td>${totalInvNative > 0 ? fmtCell(totalInvNative, totalInvBRL, 'var(--accent)') : '—'}</td>
-      <td>${hasActivity ? (
-        !saldoCalculavel && totalInvNative === 0
-          ? '—'
-          : !saldoCalculavel
-            ? '<span title="Registre aportes para calcular o saldo disponível" style="color:var(--muted);font-size:11px;">⚠️ Sem aportes</span>'
-            : (saldoNative < 0 ? '⚠️ ' : '') + fmtCell(Math.abs(saldoNative), Math.abs(saldoBRL), saldoNative < 0 ? 'var(--red)' : 'var(--accent)')
-      ) : '—'}</td>
+      <td>${hasActivity ? (!saldoCalculavel && totalInvNative === 0 ? '—' : !saldoCalculavel ? '<span title="Registre aportes para calcular o saldo disponível" style="color:var(--muted);font-size:11px;">⚠️ Sem aportes</span>' : (saldoNative < 0 ? '⚠️ ' : '') + fmtCell(Math.abs(saldoNative), Math.abs(saldoBRL), saldoNative < 0 ? 'var(--red)' : 'var(--accent)')) : '—'}</td>
       <td style="font-size:12px;color:var(--muted2);font-style:italic;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${c.observacoes||''}">${c.observacoes||'—'}</td>
       <td><div class="actions-cell">
         <button class="btn btn-secondary btn-sm btn-icon" title="Aportes" onclick="openAporteModal(${c._id})">💰</button>
@@ -8699,7 +8694,7 @@ const _origBuildPayload = typeof buildPayload === 'function' ? buildPayload : nu
 if (_origBuildPayload) {
   window.buildPayload = function() {
     const p = _origBuildPayload();
-    p.proventos = PROVENTOS.map(({ _id, ...r }) => r);
+    p.proventos = PROVENTOS.map(r => r);
     return p;
   };
 }
