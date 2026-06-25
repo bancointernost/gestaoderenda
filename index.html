@@ -1670,6 +1670,18 @@ function _doLogoutConfirmed() {
   document.getElementById('logoutConfirmModal').classList.remove('open');
   clearSession();
 
+  // Limpa dados do usuário do localStorage (Firebase é a fonte da verdade)
+  try {
+    localStorage.removeItem(STORAGE_KEY);
+    localStorage.removeItem(CORRETORAS_KEY);
+    localStorage.removeItem(ACOES_KEY);
+    localStorage.removeItem(PROVENTOS_KEY);
+    localStorage.removeItem(ORDENS_KEY);
+  } catch(e) {}
+
+  // Desconecta Firebase se estiver conectado
+  if (typeof fbLogout === 'function') fbLogout();
+
   // Remove badge do usuário e oculta item "Usuários" do menu Configurações
   const hdr = document.querySelector('.header-actions');
   if (hdr) {
@@ -2808,9 +2820,8 @@ function loadData() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) return JSON.parse(raw);
   } catch(e) {}
-  const data = INITIAL_DATA.map((r, i) => ({ ...r, _id: i + 1 }));
-  saveData(data);
-  return data;
+  // Sem cache local: retorna vazio — Firebase é a fonte da verdade
+  return [];
 }
 
 function saveData(data) {
@@ -3079,9 +3090,8 @@ function loadCorretoras() {
     const raw = localStorage.getItem(CORRETORAS_KEY);
     if (raw) return JSON.parse(raw);
   } catch(e) {}
-  const data = CORRETORAS_INITIAL.map((r, i) => ({ ...r, _id: i + 1 }));
-  saveCorretoras(data);
-  return data;
+  // Sem cache local: retorna vazio — Firebase é a fonte da verdade
+  return [];
 }
 function saveCorretoras(data) { localStorage.setItem(CORRETORAS_KEY, JSON.stringify(data)); autoSave(); }
 let CORRETORAS = loadCorretoras();
@@ -4661,25 +4671,36 @@ async function fbOnLoggedIn(user) {
       toast('☁️ Dados carregados do Firebase!');
       syncDone();
     } else {
-      syncSetProgress(60, 'Nenhum dado na nuvem. Enviando dados locais…');
-      const localCounts = {
-        'Renda Fixa':  Array.isArray(DATA)       ? DATA.length       : 0,
-        'Ações':       Array.isArray(ACOES)      ? ACOES.length      : 0,
-        'Corretoras':  Array.isArray(CORRETORAS) ? CORRETORAS.length : 0,
-        'Ordens':      Array.isArray(ORDENS)     ? ORDENS.length     : 0,
-      };
-      const ok = await firebaseSaveToCloud();
-      syncSetProgress(90, 'Confirmando envio…');
-      let pct = 90;
-      for (const [label, count] of Object.entries(localCounts)) {
-        syncAddDetail(label, count);
-        pct += 2;
-        syncSetProgress(Math.min(pct, 99));
-        await new Promise(r => setTimeout(r, 100));
+      // Firebase vazio — só envia dados locais se houver algo (evita sobrescrever com vazio)
+      const hasLocalData = (Array.isArray(DATA) && DATA.length > 0) ||
+                           (Array.isArray(ACOES) && ACOES.length > 0) ||
+                           (Array.isArray(CORRETORAS) && CORRETORAS.length > 0);
+      if (hasLocalData) {
+        syncSetProgress(60, 'Nenhum dado na nuvem. Enviando dados locais…');
+        const localCounts = {
+          'Renda Fixa':  Array.isArray(DATA)       ? DATA.length       : 0,
+          'Ações':       Array.isArray(ACOES)      ? ACOES.length      : 0,
+          'Corretoras':  Array.isArray(CORRETORAS) ? CORRETORAS.length : 0,
+          'Ordens':      Array.isArray(ORDENS)     ? ORDENS.length     : 0,
+        };
+        const ok = await firebaseSaveToCloud();
+        syncSetProgress(90, 'Confirmando envio…');
+        let pct = 90;
+        for (const [label, count] of Object.entries(localCounts)) {
+          syncAddDetail(label, count);
+          pct += 2;
+          syncSetProgress(Math.min(pct, 99));
+          await new Promise(r => setTimeout(r, 100));
+        }
+        syncSetProgress(100, ok ? 'Concluído!' : 'Concluído com avisos.');
+        document.getElementById('syncIcon').textContent = ok ? '✅' : '⚠️';
+        toast('☁️ Conectado! Dados locais enviados ao Firebase.');
+      } else {
+        // Novo navegador, Firebase ainda vazio — aguarda o usuário cadastrar dados
+        syncSetProgress(100, 'Conectado. Nenhum dado ainda na nuvem.');
+        document.getElementById('syncIcon').textContent = '✅';
+        toast('☁️ Firebase conectado! Comece cadastrando seus dados.', 'info');
       }
-      syncSetProgress(100, ok ? 'Concluído!' : 'Concluído com avisos.');
-      document.getElementById('syncIcon').textContent = ok ? '✅' : '⚠️';
-      toast('☁️ Conectado! Dados locais enviados ao Firebase.');
       syncDone();
     }
   } catch(e) {
@@ -4914,6 +4935,28 @@ let _fxCache = (() => { try { const r = localStorage.getItem(FX_CACHE_KEY); retu
 _buildVisaoOptions('rfVisaoSelect', 'rfVisaoHint', currentRFVisao);
 _buildVisaoOptions('acoesVisaoSelect', 'acoesVisaoHint', currentAcoesVisao);
 renderTable();
+
+// Se Firebase está configurado e localStorage está vazio, mostra aviso de aguardo
+// para deixar claro ao usuário que os dados virão da nuvem após o login
+(function checkFirebaseWaiting() {
+  try {
+    const fbCfgRaw = localStorage.getItem('firebase_config_producao');
+    const localEmpty = !localStorage.getItem(STORAGE_KEY);
+    if (fbCfgRaw && localEmpty) {
+      // Injeta mensagem de aguardo na tabela RF
+      setTimeout(() => {
+        const tbody = document.querySelector('#rfTable tbody') || document.querySelector('table tbody');
+        if (tbody && tbody.children.length === 0) {
+          tbody.innerHTML = `<tr><td colspan="99" style="text-align:center;padding:40px 20px;color:var(--muted);font-size:13px;">
+            <div style="font-size:28px;margin-bottom:8px;">☁️</div>
+            <div style="font-weight:600;margin-bottom:4px;">Aguardando sincronização com o Firebase</div>
+            <div style="font-size:11px;opacity:.7;">Os dados serão carregados automaticamente após o login.</div>
+          </td></tr>`;
+        }
+      }, 300);
+    }
+  } catch(e) {}
+})();
 
 // ─── TABS ────────────────────────────────────────────────────────────────────
 function switchTab(tab) {
