@@ -5080,8 +5080,15 @@ function _renderCorretorasGrid(list) {
 
     // Investido em renda fixa — valores já são em BRL (estrutura original)
     // Para corretoras FX, o usuário registra os valores em moeda estrangeira no campo Valor
-    const totalInvNative = aplicAtivas.reduce((a, r) => a + (r.Valor || 0), 0);
-    const totalInvBRL    = isFx ? (totalInvNative * fxRate) : totalInvNative;
+    const totalInvRF = aplicAtivas.reduce((a, r) => a + (r.Valor || 0), 0);
+
+    // Investido em ações — soma custoTotal das posições abertas desta corretora
+    const posicoesAcoes = (typeof calcCarteiraPosicoes === 'function' ? calcCarteiraPosicoes() : [])
+      .filter(p => p._corretoraId != null ? p._corretoraId === c._id : (p.corretora||'').toLowerCase() === (c.nome||'').toLowerCase());
+    const totalInvAcoes = posicoesAcoes.reduce((a, p) => a + (p.custoTotal || 0), 0);
+
+    const totalInvNative = totalInvRF + (isFx ? 0 : totalInvAcoes); // ações são sempre BRL
+    const totalInvBRL    = isFx ? (totalInvRF * fxRate) : totalInvNative;
 
     // Aportes
     const aportes        = c.aportes || [];
@@ -5091,7 +5098,7 @@ function _renderCorretorasGrid(list) {
     const saldoBRL       = isFx ? (saldoNative * fxRate) : saldoNative;
 
     const hasAportes  = totalAportNative > 0;
-    const hasActivity = hasAportes || totalInvNative > 0;
+    const hasActivity = hasAportes || totalInvNative > 0 || posicoesAcoes.length > 0;
 
     // Helper de formatação
     const numBR = (n, d = 0) => Number(n).toLocaleString('pt-BR', { minimumFractionDigits: d, maximumFractionDigits: d });
@@ -5128,7 +5135,7 @@ function _renderCorretorasGrid(list) {
       </td>
       <td style="font-size:12px;color:var(--muted);">${c.proprietario ? '👤 ' + c.proprietario : '—'}</td>
       <td><span class="corretora-tag">${c.tipo||'Corretora'}</span></td>
-      <td style="text-align:center;font-weight:600;">${aplicAtivas.length}</td>
+      <td style="text-align:center;font-weight:600;">${aplicAtivas.length + posicoesAcoes.length}</td>
       <td>${hasAportes ? fmtCell(totalAportNative, totalAportBRL, 'var(--accent2)') : '—'}</td>
       <td>${totalInvNative > 0 ? fmtCell(totalInvNative, totalInvBRL, 'var(--accent)') : '—'}</td>
       <td>${hasActivity ? (saldoNative < 0 ? '⚠️ ' : '') + fmtCell(Math.abs(saldoNative), Math.abs(saldoBRL), saldoNative < 0 ? 'var(--red)' : 'var(--accent)') : '—'}</td>
@@ -8943,9 +8950,29 @@ function handleImportB3(input) {
       // Deduplica por ticker caso ambas as variantes de nome de aba existam no mesmo arquivo
       const _dedupTicker = (arr) => { const seen = new Set(); return arr.filter(l => { if (seen.has(l.ticker)) return false; seen.add(l.ticker); return true; }); };
       const todasAcoes   = [..._dedupTicker(linhasAcoes), ..._dedupTicker(linhasFundos)];
-      const tickersExist = new Set(ACOES.map(a => (a.Ticker||'').toUpperCase()));
-      const acoesPendentes = todasAcoes.filter(l => !tickersExist.has(l.ticker));
-      const acoesExistentes = todasAcoes.filter(l => tickersExist.has(l.ticker));
+
+      // Calcula pendentes/existentes de ações levando em conta a corretora de destino.
+      // Se uma corretora específica for selecionada, só considera "existente" o ticker
+      // que já esteja cadastrado NESSA corretora — evitando conflito entre contas diferentes.
+      function calcAcoesPendentes(corrObj) {
+        let tickersExist;
+        if (corrObj) {
+          tickersExist = new Set(
+            ACOES
+              .filter(a => a._corretoraId != null ? a._corretoraId === corrObj._id : (a.Corretora||'').toLowerCase() === (corrObj.nome||'').toLowerCase())
+              .map(a => (a.Ticker||'').toUpperCase())
+          );
+        } else {
+          // Sem corretora específica: comportamento original (global)
+          tickersExist = new Set(ACOES.map(a => (a.Ticker||'').toUpperCase()));
+        }
+        return {
+          pendentes:  todasAcoes.filter(l => !tickersExist.has(l.ticker)),
+          existentes: todasAcoes.filter(l =>  tickersExist.has(l.ticker)),
+        };
+      }
+
+      let { pendentes: acoesPendentes, existentes: acoesExistentes } = calcAcoesPendentes(null);
 
       // ─── 3. PROVENTOS ──────────────────────────────────────────────────────
       const provSheet = wb.Sheets['Proventos Recebidos'] || wb.Sheets['Proventos'] || wb.Sheets['Empréstimos'] || null;
@@ -8993,13 +9020,13 @@ function handleImportB3(input) {
               <div style="background:rgba(124,106,247,.07);border:1px solid rgba(124,106,247,.2);border-radius:10px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;">
                 <div>
                   <div style="font-size:12px;font-weight:700;color:var(--accent2,#7c6af7);">📈 Ações &amp; FIIs</div>
-                  <div style="font-size:11px;color:var(--muted,#7a8499);margin-top:2px;">
+                  <div id="modalAcoesInfo" style="font-size:11px;color:var(--muted,#7a8499);margin-top:2px;">
                     ${todasAcoes.length > 0
                       ? `${linhasAcoes.length} ação(ões) · ${linhasFundos.length} FII(s) · ${acoesPendentes.length} novo(s) · ${acoesExistentes.length} já existe(m)`
                       : '⚠️ Aba não encontrada'}
                   </div>
                 </div>
-                <span style="font-size:20px;font-weight:800;color:var(--accent2,#7c6af7);">${acoesPendentes.length}</span>
+                <span id="modalAcoesNum" style="font-size:20px;font-weight:800;color:var(--accent2,#7c6af7);">${acoesPendentes.length}</span>
               </div>
               <!-- Proventos -->
               <div style="background:rgba(245,166,35,.07);border:1px solid rgba(245,166,35,.2);border-radius:10px;padding:12px 14px;display:flex;align-items:center;justify-content:space-between;">
@@ -9014,8 +9041,8 @@ function handleImportB3(input) {
             </div>
 
             ${temExistAcoes ? `
-            <div style="margin-bottom:16px;">
-              <p style="font-size:11px;color:var(--muted,#7a8499);margin:0 0 8px;">Para os <b style="color:var(--text)">${acoesExistentes.length} tickers já existentes</b> em Ações:</p>
+            <div id="modalAcoesExistPanel" style="margin-bottom:16px;">
+              <p id="modalAcoesExistLabel" style="font-size:11px;color:var(--muted,#7a8499);margin:0 0 8px;">Para os <b style="color:var(--text)">${acoesExistentes.length} tickers já existentes</b> em Ações:</p>
               <div style="display:flex;gap:6px;flex-wrap:wrap;">
                 <label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;background:rgba(255,255,255,.04);border:1px solid var(--border,#2a3348);border-radius:8px;padding:5px 10px;">
                   <input type="radio" name="modoAcoes" value="ignorar" checked style="accent-color:var(--accent2,#7c6af7)"> Manter existentes
@@ -9046,11 +9073,36 @@ function handleImportB3(input) {
         const pv = calcProvPendentes(corrObj);
         _provPend = pv.pendentes; _provNov = pv.novos; _provDup = pv.dups;
 
+        // Recalcula ações levando em conta a corretora selecionada
+        const acCalc = calcAcoesPendentes(corrObj);
+        acoesPendentes  = acCalc.pendentes;
+        acoesExistentes = acCalc.existentes;
+
         // Atualiza contadores RF
         const rfEl = document.getElementById('modalRfInfo');
         const rfNum = document.getElementById('modalRfNum');
         if (rfEl) rfEl.textContent = (rfSheet||tdSheet) ? `${_rfNov} novo(s) · ${_rfDup} duplicata(s)` : '⚠️ Aba não encontrada';
         if (rfNum) rfNum.textContent = _rfNov;
+
+        // Atualiza contadores Ações
+        const acEl = document.getElementById('modalAcoesInfo');
+        const acNum = document.getElementById('modalAcoesNum');
+        if (acEl) acEl.textContent = todasAcoes.length > 0
+          ? `${linhasAcoes.length} ação(ões) · ${linhasFundos.length} FII(s) · ${acoesPendentes.length} novo(s) · ${acoesExistentes.length} já existe(m)`
+          : '⚠️ Aba não encontrada';
+        if (acNum) acNum.textContent = acoesPendentes.length;
+
+        // Atualiza painel de tickers existentes
+        const existPanel = document.getElementById('modalAcoesExistPanel');
+        if (existPanel) {
+          if (acoesExistentes.length > 0) {
+            existPanel.style.display = '';
+            const lbl = existPanel.querySelector('#modalAcoesExistLabel');
+            if (lbl) lbl.innerHTML = `Para os <b style="color:var(--text)">${acoesExistentes.length} tickers já existentes</b> em Ações:`;
+          } else {
+            existPanel.style.display = 'none';
+          }
+        }
 
         // Atualiza contadores Proventos
         const pvEl = document.getElementById('modalPvInfo');
